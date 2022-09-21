@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<Config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <CertName>C:\lemma-certificate\client_keystore.p12</CertName>
+  <CertPass>#rPUxWCK9)</CertPass>
+  <rncbURL>https://qr.rncb.ru:10443</rncbURL>
+  <TerminalID>QR800064</TerminalID>
+  <PayTypeName>Банковские карты СБП</PayTypeName>
+  <qrsize>small</qrsize>
+  <ShowOkPopupAboutPay>false</ShowOkPopupAboutPay>
+  <print_on_receipt_printer>false</print_on_receipt_printer>
+  <print_on_precheque>true</print_on_precheque>
+  <FullLogs>true</FullLogs>
+</Config>
