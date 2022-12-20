@@ -20,6 +20,13 @@ using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using RequestQR;
 using ResponseQR;
+using RequestgetOperation;
+using ResponsegetOperation;
+using ResponseperformReverse;
+using RequestperformReverse;
+using ResponsecontinueReverse;
+using RequestcontinueReverse;
+
 using Resto.Front.Api.Data.Cheques;
 using System.Xml.Linq;
 using Resto.Front.Api.Data.Print;
@@ -70,12 +77,47 @@ namespace RNCB_Plugin
             var f = Config.Instance.TerminalID;
             PluginContext.Notifications.BillChequePrinting.Subscribe(AddBillChequeExtensions);
             PluginContext.Notifications.NavigatingToPaymentScreen.Subscribe(NavigatingToPaymentScreen);
+            PluginContext.Notifications.OrderStorned.Subscribe(OrderStorned);
             Plugin.Log_Mess_Info("Плагин {0} успешно запущен.", Plugin.Name);
 
             PluginContext.Notifications.ScreenChanged.Subscribe(ScreenChanged);
 
-           // PluginContext.Operations.AddButtonToPluginsMenu("Тест кнопка", x => btn(x.vm, x.printer));
+            // PluginContext.Operations.AddButtonToPluginsMenu("Тест кнопка", x => btn(x.vm, x.printer));
 
+        }
+
+        private void OrderStorned((IOrder order, Guid newOrderId, IUser user) obj)
+        {
+            try
+            {
+                PluginContext.Log.Info($"Возврат оплаты заказа №{obj.order.Number}");
+                IOrder order = obj.order;
+
+                if (order.Payments.Where(x => (x.Type.Name == Config.Instance.PayTypeName)).Any())
+                {
+                    string traceReferenceNumber = PluginContext.Operations.TryGetOrderExternalDataByKey(order, "traceReferenceNumber");
+                    PluginContext.Log.Info($"traceReferenceNumber - {traceReferenceNumber}");
+                    var result = СontinueReverse(PerformReverse(traceReferenceNumber, (double)order.Payments.First(x => (x.Type.Name == Config.Instance.PayTypeName)).Sum));
+
+                    if (result.body.response.type == "SUCCESS")
+                    {
+                        PluginContext.Operations.AddNotificationMessage($"Возврат средств по СБП РНКБ прошёл успешно", Plugin.Name, TimeSpan.FromSeconds(5));
+                        PluginContext.Log.Info($"Возврат средств по СБП РНКБ прошёл успешно");
+                        //PluginContext.Operations.DeleteOrderExternalData("externalId", PluginContext.Operations.GetOrderById(obj.newOrderId), PluginContext.Operations.GetCredentials());
+                    }
+                    else
+                    {
+                        PluginContext.Operations.AddErrorMessage($"Не удалось вернуть оплату по СБП РНКБ.Произошла ошибка: {result.body.response.code} | {result.body.response.message}", Plugin.Name, TimeSpan.FromSeconds(10));
+                        PluginContext.Log.Error($"Не удалось вернуть оплату по СБП РНКБ.Произошла ошибка: {result.body.response.code} | {result.body.response.message}");
+                    }
+                }
+            }
+            catch(Exception ex)
+            {
+                PluginContext.Log.Error(ex.Message + ex.StackTrace);
+                throw new Exception(ex.Message, ex);
+            }
+            
         }
 
         private void btn(IViewManager vm, IReceiptPrinter printer)
@@ -83,10 +125,10 @@ namespace RNCB_Plugin
             ExtendedInputDialogSettings settings = new ExtendedInputDialogSettings() { EnablePhone = true };
             var result = vm.ShowExtendedInputDialog("Введите номер телефона", "Телефон", settings);
             var phone = result as PhoneInputDialogResult;
-            var client = PluginContext.Operations.TryGetClientByPhone(PluginContext.Operations.GetCredentials(), phone.PhoneNumber );
+            var client = PluginContext.Operations.TryGetClientByPhone(PluginContext.Operations.GetCredentials(), phone.PhoneNumber);
             List<EmailDto> emailDto = new List<EmailDto>();
-            emailDto.Add( new EmailDto() { EmailValue = vm.ShowKeyboard("Введите емейл"), IsMain = true });
-            PluginContext.Operations.ChangeClientEmails( emailDto, client, PluginContext.Operations.GetCredentials());
+            emailDto.Add(new EmailDto() { EmailValue = vm.ShowKeyboard("Введите емейл"), IsMain = true });
+            PluginContext.Operations.ChangeClientEmails(emailDto, client, PluginContext.Operations.GetCredentials());
         }
 
         private void ScreenChanged(IScreen obj)
@@ -162,11 +204,17 @@ namespace RNCB_Plugin
                     var editsession = os.CreateEditSession();
                     var paymentType = os.GetPaymentTypes().Where(x => (x.Name == Config.Instance.PayTypeName)).First();
                     editsession.AddExternalPaymentItem((decimal)result.body.paymentCodeDocument.amounts.transactionAmount.amount, true, null, null, paymentType, order);
+                    editsession.AddOrderExternalData("traceReferenceNumber", result.body.paymentCodeDocument.traceReferenceNumber, true, order);
                     os.SubmitChanges(os.GetCredentials(), editsession);
 
                     if (Config.Instance.ShowOkPopupAboutPay)
+                    {
                         vm.ShowOkPopup("СБП - РНКБ", $"Заказ оплачен через систему СБП, оплата \"{paymentType.Name}\"" +
                         $" на сумму {(decimal)result.body.paymentCodeDocument.amounts.transactionAmount.amount}р. автоматически добавлена в заказ.");
+
+                        Plugin.Log_Mess_Info($"Заказ оплачен через систему СБП, оплата \"{paymentType.Name}\"" +
+                                $" на сумму {(decimal)result.body.paymentCodeDocument.amounts.transactionAmount.amount}р. автоматически добавлена в заказ.");
+                    }
                     else
                         Plugin.Log_Mess_Info($"Заказ оплачен через систему СБП, оплата \"{paymentType.Name}\"" +
                             $" на сумму {(decimal)result.body.paymentCodeDocument.amounts.transactionAmount.amount}р. автоматически добавлена в заказ.");
@@ -294,6 +342,8 @@ namespace RNCB_Plugin
 
         }
 
+
+
         private void OrderScreenButton(IOrder order, IOperationService os, IViewManager vm)
         {
             //var windowThread = new Thread(EntryPoint);
@@ -386,49 +436,296 @@ namespace RNCB_Plugin
             }
         }
 
-        public static RespQR GenerateQR(string DataToPost)
+        public static getOperationResponse CheckOperation(string traceReferenceNumber)
         {
-            //try
-            //{
-                Plugin.Log_Info("Зашли в GenerateQR");
-
+            try
+            {
+                PluginContext.Log.Info("Отправка запроса: " + Config.Instance.rncbURL + "/solar-proc-payment-codes-gateway/ext/term-pc-json-api/getOperationStatement");
                 CertificateWebClient certificateWebClient = new CertificateWebClient(new X509Certificate2(Config.Instance.CertName, Config.Instance.CertPass));
-
-
-
-                Plugin.Log_Info("Сертификат прочитан");
                 certificateWebClient.Headers.Add("Content-Type", "application/json");
 
-                string data = DataToPost;
+                getOperationRequest getOperationRequest = new getOperationRequest()
+                {
+                    header = new RequestgetOperation.Header()
+                    {
+                        protocol = new RequestgetOperation.Protocol()
+                        {
+                            name = "solar-ws",
+                            version = "2.0"
+                        },
+                        messageId = Guid.NewGuid().ToString(),
+                        messageDate = DateTime.Now,
+                        originator = new RequestgetOperation.Originator()
+                        {
+                            system = "MOBILE_APP"
+                        }
+                    },
+                    body = new RequestgetOperation.Body()
+                    {
+                        txn = new RequestgetOperation.Txn()
+                        {
+                            reference = new RequestgetOperation.Reference()
+                            {
+                                identifiers = new RequestgetOperation.Identifiers()
+                                {
+                                    identifier = new List<RequestgetOperation.Identifier>()
+                                    {
+                                        new RequestgetOperation.Identifier() { code = "operationId", identifier = traceReferenceNumber}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                string data = JsonConvert.SerializeObject(getOperationRequest);
+
                 certificateWebClient.Encoding = Encoding.UTF8;
-                Plugin.Log_Info("Отправляем запрос");
+                if (Config.Instance.FullLogs)
+                    PluginContext.Log.Info(data);
+                string str7 = certificateWebClient.UploadString(Config.Instance.rncbURL + "/solar-proc-payment-codes-gateway/ext/term-pc-json-api/getOperationStatement", data);
+
+                PluginContext.Log.Info("Ответ получен");
+
+                if (Config.Instance.FullLogs)
+                    PluginContext.Log.Info(str7);
+
+                var result = JsonConvert.DeserializeObject<getOperationResponse>(str7);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                PluginContext.Log.Info(ex.ToString());
+                if (ex is WebException)
+                {
+                    WebException webException = ex as WebException;
+                    if (webException.Response != null)
+                    {
+                        Stream responseStream = webException.Response.GetResponseStream();
+                        if (responseStream != null)
+                            PluginContext.Log.Info(new StreamReader(responseStream).ReadToEnd());
+                    }
+                }
+
+                return null;
+            }
+        }
+
+        public static performReverseResponse PerformReverse(string traceReferenceNumber, double amountSum)
+        {
+            try
+            {
+                PluginContext.Log.Info("Отправка запроса: " + Config.Instance.rncbURL + "/solar-proc-payment-codes-gateway/ext/term-pc-json-api/performReverse");
+                CertificateWebClient certificateWebClient = new CertificateWebClient(new X509Certificate2(Config.Instance.CertName, Config.Instance.CertPass));
+                certificateWebClient.Headers.Add("Content-Type", "application/json");
+
+                performReverseRequest performReverseRequest = new performReverseRequest()
+                {
+                    header = new RequestperformReverse.Header()
+                    {
+                        protocol = new RequestperformReverse.Protocol()
+                        {
+                            name = "solar-ws",
+                            version = "2.0"
+                        },
+                        messageId = Guid.NewGuid().ToString(),
+                        messageDate = DateTime.Now,
+                        originator = new RequestperformReverse.Originator()
+                        {
+                            system = "sslUser"
+                        }
+                    },
+                    body = new RequestperformReverse.Body()
+                    {
+                        txn = new RequestperformReverse.Txn()
+                        {
+                            isPartial = true,
+                            origOperationRef = new OrigOperationRef()
+                            {
+                                identifiers = new RequestperformReverse.Identifiers()
+                                {
+                                    identifier = new List<RequestperformReverse.Identifier>()
+                                    {
+                                        new RequestperformReverse.Identifier(){ code = "operationId", identifier = traceReferenceNumber}
+                                    }
+                                }
+
+                            },
+                            debit = new RequestperformReverse.Debit()
+                            {
+                                attributes = new RequestperformReverse.Attributes()
+                                {
+                                    attribute = new List<RequestperformReverse.Attribute>()
+                                    {
+                                        new RequestperformReverse.Attribute(){ code = "reverse.reason", attribute = "Bad quality"},
+                                        new RequestperformReverse.Attribute(){ code = "term.terminalId", attribute = Config.Instance.TerminalID}
+                                    }
+                                }
+                            },
+                            //credit = new RequestperformReverse.Credit()
+                            //{
+                            //    attributes = new RequestperformReverse.Attributes()
+                            //    {
+                            //        attribute = new List<RequestperformReverse.Attribute>()
+                            //        {
+                            //            new RequestperformReverse.Attribute(){ code = "srt.memberId", attribute = getOperationResponse.body.txn.debit.parameters.parameter.First(x => x.code == "srt.memberId").parameter},
+                            //        }
+                            //    }
+                            //},
+                            details = "Возврат",
+                            amounts = new RequestperformReverse.Amounts()
+                            {
+                                transactionAmount = new RequestperformReverse.TransactionAmount()
+                                {
+                                    amount = amountSum,
+                                    currency = "643"
+                                }
+                            }
+                        }
+                    }
+                };
+
+                string data = JsonConvert.SerializeObject(performReverseRequest);
+
+                certificateWebClient.Encoding = Encoding.UTF8;
+                if (Config.Instance.FullLogs)
+                    PluginContext.Log.Info(data);
+                string str7 = certificateWebClient.UploadString(Config.Instance.rncbURL + "/solar-proc-payment-codes-gateway/ext/term-pc-json-api/performReverse", data);
+
+                PluginContext.Log.Info("Ответ получен");
+
+                if (Config.Instance.FullLogs)
+                    PluginContext.Log.Info(str7);
+                var result = JsonConvert.DeserializeObject<performReverseResponse>(str7);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                PluginContext.Log.Info(ex.ToString());
+                if (ex is WebException)
+                {
+                    WebException webException = ex as WebException;
+                    if (webException.Response != null)
+                    {
+                        Stream responseStream = webException.Response.GetResponseStream();
+                        if (responseStream != null)
+                            PluginContext.Log.Info(new StreamReader(responseStream).ReadToEnd());
+                    }
+                }
+
+                return null;
+            }
+        }
+
+        public static continueReverseResponse СontinueReverse(performReverseResponse performReverseResponse)
+        {
+            try
+            {
+                PluginContext.Log.Info("Отправка запроса: " + Config.Instance.rncbURL + "/solar-proc-payment-codes-gateway/ext/term-pc-json-api/continueReverse");
+                CertificateWebClient certificateWebClient = new CertificateWebClient(new X509Certificate2(Config.Instance.CertName, Config.Instance.CertPass));
+                certificateWebClient.Headers.Add("Content-Type", "application/json");
+
+                continueReverseRequest continueReverseRequest = new continueReverseRequest()
+                {
+                    header = new RequestcontinueReverse.Header()
+                    {
+                        protocol = new RequestcontinueReverse.Protocol()
+                        {
+                            name = "solar-ws",
+                            version = "2.0"
+                        },
+                        messageId = Guid.NewGuid().ToString(),
+                        messageDate = DateTime.Now,
+                        originator = new RequestcontinueReverse.Originator()
+                        {
+                            system = "sslUser"
+                        }
+                    },
+                    body = new RequestcontinueReverse.Body()
+                    {
+                        txn = new RequestcontinueReverse.Txn()
+                        {
+                            reference = new RequestcontinueReverse.Reference() { id = performReverseResponse.body.reference.id.ToString()}
+                        }
+                    }
+                };
+
+                string data = JsonConvert.SerializeObject(continueReverseRequest);
+
+                certificateWebClient.Encoding = Encoding.UTF8;
+                if (Config.Instance.FullLogs)
+                    PluginContext.Log.Info(data);
+
+                string str7 = certificateWebClient.UploadString(Config.Instance.rncbURL + "/solar-proc-payment-codes-gateway/ext/term-pc-json-api/continueReverse", data);
+
+                PluginContext.Log.Info("Ответ получен");
+
+                if (Config.Instance.FullLogs)
+                    PluginContext.Log.Info(str7);
+                var result = JsonConvert.DeserializeObject<continueReverseResponse>(str7);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                PluginContext.Log.Info(ex.ToString());
+                if (ex is WebException)
+                {
+                    WebException webException = ex as WebException;
+                    if (webException.Response != null)
+                    {
+                        Stream responseStream = webException.Response.GetResponseStream();
+                        if (responseStream != null)
+                            PluginContext.Log.Info(new StreamReader(responseStream).ReadToEnd());
+                    }
+                }
+
+                return null;
+            }
+        }
+
+        public static RespQR GenerateQR(string DataToPost)
+        {
+            try
+            {
+                Plugin.Log_Info("Зашли в GenerateQR");
+
+            CertificateWebClient certificateWebClient = new CertificateWebClient(new X509Certificate2(Config.Instance.CertName, Config.Instance.CertPass));
+
+
+
+            Plugin.Log_Info("Сертификат прочитан");
+            certificateWebClient.Headers.Add("Content-Type", "application/json");
+
+            string data = DataToPost;
+            certificateWebClient.Encoding = Encoding.UTF8;
+            Plugin.Log_Info("Отправляем запрос");
 
             if (Config.Instance.FullLogs)
                 PluginContext.Log.Info(DataToPost);
 
             string str7 = certificateWebClient.UploadString(Config.Instance.rncbURL + "/solar-proc-payment-codes-gateway/ext/term-pc-json-api/registerPaymentCodeDocument", data);
-                Plugin.Log_Info("Ответ получен");
-                if (Config.Instance.FullLogs)
-                    PluginContext.Log.Info(str7);
-                var result = JsonConvert.DeserializeObject<ResponseQR.RespQR>(str7);
-                return result;
-            //}
-            //catch (Exception ex)
-            //{
-            //    PluginContext.Log.Info(ex.ToString());
-            //    if (ex is WebException)
-            //    {
-            //        WebException webException = ex as WebException;
-            //        if (webException.Response != null)
-            //        {
-            //            Stream responseStream = webException.Response.GetResponseStream();
-            //            if (responseStream != null)
-            //                PluginContext.Log.Info(new StreamReader(responseStream).ReadToEnd());
-            //        }
-            //    }
+            Plugin.Log_Info("Ответ получен");
+            if (Config.Instance.FullLogs)
+                PluginContext.Log.Info(str7);
+            var result = JsonConvert.DeserializeObject<ResponseQR.RespQR>(str7);
+            return result;
+            }
+            catch (Exception ex)
+            {
+                PluginContext.Log.Info(ex.ToString());
+                if (ex is WebException)
+                {
+                    WebException webException = ex as WebException;
+                    if (webException.Response != null)
+                    {
+                        Stream responseStream = webException.Response.GetResponseStream();
+                        if (responseStream != null)
+                            PluginContext.Log.Info(new StreamReader(responseStream).ReadToEnd());
+                    }
+                }
 
-            //    return null;
-            //}
+                return null;
+            }
         }
 
         public void EntryPoint()
@@ -459,7 +756,7 @@ namespace RNCB_Plugin
                 //var subscription = subscriptions.Pop();
                 try
                 {
-                     subscriptions.Dispose();
+                    subscriptions.Dispose();
                 }
                 catch (RemotingException)
                 {

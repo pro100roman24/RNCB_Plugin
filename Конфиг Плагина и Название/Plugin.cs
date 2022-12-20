@@ -10,7 +10,7 @@ namespace RNCB_Plugin
     class Plugin
     {
         public const string Name = @"RNCB_Plugin";
-        public const string Version = "1.2.7.9";
+        public const string Version = "1.4.7.9";
         public static Config Params
         {
             get

@@ -50,6 +50,7 @@ namespace ResponseQR
         public string status { get; set; }
         public MerchantData merchantData { get; set; }
         public string description { get; set; }
+        public string traceReferenceNumber { get; set; }
     }
 
     public class Protocol

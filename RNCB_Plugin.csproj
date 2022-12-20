@@ -88,10 +88,16 @@
     <Compile Include="CertificateWebClient.cs">
       <SubType>Component</SubType>
     </Compile>
-    <Compile Include="RequestQRstatus.cs" />
+    <Compile Include="Классы\continueReverseRequest.cs" />
+    <Compile Include="Классы\continueReverseResponse.cs" />
+    <Compile Include="Классы\getOperationStatementRequest.cs" />
+    <Compile Include="Классы\getOperationStatementResponse.cs" />
+    <Compile Include="Классы\performReverseRequest.cs" />
+    <Compile Include="Классы\performReverseResponse.cs" />
+    <Compile Include="Классы\RequestQRstatus.cs" />
     <Compile Include="ExternalPaymentProcessorSample.cs" />
-    <Compile Include="RequestQR.cs" />
-    <Compile Include="ResponseQR.cs" />
+    <Compile Include="Классы\RequestQR.cs" />
+    <Compile Include="Классы\ResponseQR.cs" />
     <Compile Include="Form1.cs">
       <SubType>Form</SubType>
     </Compile>
